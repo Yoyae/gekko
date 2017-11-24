@@ -17,12 +17,24 @@ Checker.prototype.notValid = function(conf) {
 
 Checker.prototype.getExchangeCapabilities = function(slug) {
   var capabilities;
-
+  
+  var ccxtSlug = undefined;
+  
+  if(_.isUndefined(slug)){
+     util.die(`Exchange is undefined`);
+  }
+  
+  var indexCcxt = slug.search('ccxt');
+  if(indexCcxt !== -1){
+     ccxtSlug = slug.substr(5);
+     slug = 'ccxt';
+  }
+  
   if(!fs.existsSync(dirs.exchanges + slug + '.js'))
     util.die(`Gekko does not know exchange "${slug}"`);
 
   var Trader = require(dirs.exchanges + slug);
-  capabilities = Trader.getCapabilities();
+  capabilities = Trader.getCapabilities(ccxtSlug);
 
   return capabilities;
 }
