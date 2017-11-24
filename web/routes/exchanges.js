@@ -32,7 +32,10 @@ module.exports = function *() {
       return;
     }
 
-    allCapabilities.push(Trader.getCapabilities());
+    if (exchange === 'ccxt')
+      allCapabilities = allCapabilities.concat(Trader.getCapabilities());
+    else
+      allCapabilities.push(Trader.getCapabilities());
   });
 
   this.body = allCapabilities;
