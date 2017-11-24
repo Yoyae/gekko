@@ -22,6 +22,10 @@ var Fetcher = function(config) {
     throw 'TradeFetcher expects a config';
 
   var provider = config.watch.exchange.toLowerCase();
+  var indexCcxt = provider.search('ccxt');
+  if(indexCcxt !== -1){
+    provider = 'ccxt';
+  }
   var DataProvider = require(util.dirs().gekko + 'exchanges/' + provider);
   _.bindAll(this);
 
