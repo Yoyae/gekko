@@ -133,7 +133,7 @@ Trader.prototype.getFee = function(callback) {
    //getFee is WIP ccxt side 
    //See https://github.com/ccxt/ccxt/issues/640
    try{
-      var fee = parseFloat(this.ccxt[this.pair]['maker']);
+      var fee = parseFloat(this.ccxt.markets[this.pair]['maker']);
       if(!_.isNumber(fee) || _.isNaN(fee)){
          fee = 0.0025; //default
       }
@@ -150,12 +150,20 @@ Trader.prototype.buy = function(amount, price, callback) {
   (async () => {
     try{
        var roundAmount = 0;
-       var lot = this.ccxt[this.pair]['lot'];
-       var precision = this.ccxt[this.pair]['precision']['amount'];
+       try{
+         var lot = this.ccxt.markets[this.pair]['lot'];
+       }catch(e){
+         var lot = undefined;
+       }
+       try{
+         var precision = this.ccxt.markets[this.pair]['precision']['amount'];
+       }catch(e){
+         var precision = undefined;
+       }
        if(!_.isUndefined(lot)){
-          roundAmount = amountToLots(this.pair, amount);
+          roundAmount = this.ccxt.amountToLots(this.pair, amount);
        }else if (!_.isUndefined(precision)){
-          roundAmount = amountToPrecision(this.pair, amount);
+          roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
        }else{
           roundAmount = amount;
        }
@@ -188,8 +196,20 @@ Trader.prototype.sell = function(amount, price, callback) {
   (async () => {
     try{
        var roundAmount = 0;
-       var lot = this.ccxt[this.pair]['lot'];
-       var precision = this.ccxt[this.pair]['precision']['amount'];
+       try{
+         console.log(this.ccxt.marketId(this.pair));
+         var lot = this.ccxt[this.ccxt.marketId(this.pair)]['lot'];
+       }catch(e){
+         console.log(e);
+         var lot = undefined;
+       }
+       try{
+         var precision = this.ccxt[this.ccxt.marketId(this.pair)]['precision']['amount'];
+       }catch(e){
+         console.log(e);
+         var precision = undefined;
+       }
+       this.ccxt[this.ccxt.marketId(this.pair)]['lot'];
        if(!_.isUndefined(lot)){
           roundAmount = amountToLots(this.pair, amount);
        }else if (!_.isUndefined(precision)){
