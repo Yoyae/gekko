@@ -197,23 +197,19 @@ Trader.prototype.sell = function(amount, price, callback) {
     try{
        var roundAmount = 0;
        try{
-         console.log(this.ccxt.marketId(this.pair));
-         var lot = this.ccxt[this.ccxt.marketId(this.pair)]['lot'];
+         var lot = this.ccxt.markets[this.pair]['lot'];
        }catch(e){
-         console.log(e);
          var lot = undefined;
        }
        try{
-         var precision = this.ccxt[this.ccxt.marketId(this.pair)]['precision']['amount'];
+         var precision = this.ccxt.markets[this.pair]['precision']['amount'];
        }catch(e){
-         console.log(e);
          var precision = undefined;
        }
-       this.ccxt[this.ccxt.marketId(this.pair)]['lot'];
        if(!_.isUndefined(lot)){
-          roundAmount = amountToLots(this.pair, amount);
+          roundAmount = this.ccxt.amountToLots(this.pair, amount);
        }else if (!_.isUndefined(precision)){
-          roundAmount = amountToPrecision(this.pair, amount);
+          roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
        }else{
           roundAmount = amount;
        }
