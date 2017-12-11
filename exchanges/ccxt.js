@@ -133,7 +133,7 @@ Trader.prototype.getFee = function(callback) {
    //getFee is WIP ccxt side 
    //See https://github.com/ccxt/ccxt/issues/640
    try{
-      var fee = parseFloat(this.ccxt['markets']['maker']);
+      var fee = parseFloat(this.ccxt[this.pair]['maker']);
       if(!_.isNumber(fee) || _.isNaN(fee)){
          fee = 0.0025; //default
       }
@@ -149,7 +149,18 @@ Trader.prototype.buy = function(amount, price, callback) {
   var retFlag = false;
   (async () => {
     try{
-       data = await this.ccxt.createLimitBuyOrder (this.pair, amount, price);
+       var roundAmount = 0;
+       var lot = this.ccxt[this.pair]['lot'];
+       var precision = this.ccxt[this.pair]['precision']['amount'];
+       if(!_.isUndefined(lot)){
+          roundAmount = amountToLots(this.pair, amount);
+       }else if (!_.isUndefined(precision)){
+          roundAmount = amountToPrecision(this.pair, amount);
+       }else{
+          roundAmount = amount;
+       }
+       
+       data = await this.ccxt.createLimitBuyOrder (this.pair, roundAmount, price);
 
        callback(null, data['id']);
     }catch(e){
@@ -176,7 +187,18 @@ Trader.prototype.sell = function(amount, price, callback) {
   var retFlag = false;
   (async () => {
     try{
-       data = await this.ccxt.createLimitSellOrder (this.pair, amount, price);
+       var roundAmount = 0;
+       var lot = this.ccxt[this.pair]['lot'];
+       var precision = this.ccxt[this.pair]['precision']['amount'];
+       if(!_.isUndefined(lot)){
+          roundAmount = amountToLots(this.pair, amount);
+       }else if (!_.isUndefined(precision)){
+          roundAmount = amountToPrecision(this.pair, amount);
+       }else{
+          roundAmount = amount;
+       }
+       
+       data = await this.ccxt.createLimitSellOrder (this.pair, roundAmount, price);
 
        callback(null, data['id']);
     }catch(e){
@@ -250,8 +272,10 @@ Trader.prototype.cancelOrder = function(order, callback) {
 Trader.prototype.getTrades = function(since, callback, descending) {
 
   var firstFetch = !!since;
+
   var args = _.toArray(arguments);
   
+                           
   var retFlag = false;
   (async () => {
     try{
@@ -295,6 +319,7 @@ Trader.prototype.getTrades = function(since, callback, descending) {
   deasync.loopWhile(function(){return !retFlag;});
 }
 
+                                         
 Trader.getCapabilities = function (ccxtSlug) {
    var capabilities =  [ { name: 'ccxt-_1btcxe',
                            slug: 'ccxt-_1btcxe',
@@ -1182,6 +1207,8 @@ Trader.getCapabilities = function (ccxtSlug) {
 //Dynamic getCapabilities - takes a minut to load all exchanges (too long)
 Trader.setCapabilities = function (ccxtSlug) {
     var retFlag = false;
+                  
+                                       
     if(_.isUndefined(ccxtSlug)){
        var ret = [];
        var ccxtExchanges = Ccxt.exchanges;
