@@ -149,26 +149,26 @@ Trader.prototype.buy = function(amount, price, callback) {
   var retFlag = false;
   (async () => {
     try{
-       var roundAmount = 0;
+       //Round amount
        try{
-         var lot = this.ccxt.markets[this.pair]['lot'];
+         var roundAmount = this.ccxt.amountToLots(this.pair, amount);
        }catch(e){
-         var lot = undefined;
+           try{
+             var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
+          }catch(e){
+             var roundAmount = amount;
+          }           
        }
+       //Round price
        try{
-         var precision = this.ccxt.markets[this.pair]['precision']['amount'];
+          var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
        }catch(e){
-         var precision = undefined;
-       }
-       if(!_.isUndefined(lot)){
-          roundAmount = this.ccxt.amountToLots(this.pair, amount);
-       }else if (!_.isUndefined(precision)){
-          roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
-       }else{
-          roundAmount = amount;
-       }
+          var roundPrice = price;
+       }     
        
-       data = await this.ccxt.createLimitBuyOrder (this.pair, roundAmount, price);
+       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency) 
+       
+       data = await this.ccxt.createLimitBuyOrder (this.pair, roundAmount, roundPrice);
 
        callback(null, data['id']);
     }catch(e){
@@ -195,26 +195,26 @@ Trader.prototype.sell = function(amount, price, callback) {
   var retFlag = false;
   (async () => {
     try{
-       var roundAmount = 0;
+       //Round amount
        try{
-         var lot = this.ccxt.markets[this.pair]['lot'];
+         var roundAmount = this.ccxt.amountToLots(this.pair, amount);
        }catch(e){
-         var lot = undefined;
+           try{
+             var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
+          }catch(e){
+             var roundAmount = amount;
+          }           
        }
+       //Round price
        try{
-         var precision = this.ccxt.markets[this.pair]['precision']['amount'];
+          var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
        }catch(e){
-         var precision = undefined;
-       }
-       if(!_.isUndefined(lot)){
-          roundAmount = this.ccxt.amountToLots(this.pair, amount);
-       }else if (!_.isUndefined(precision)){
-          roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
-       }else{
-          roundAmount = amount;
-       }
+          var roundPrice = price;
+       }     
+
+       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)    
        
-       data = await this.ccxt.createLimitSellOrder (this.pair, roundAmount, price);
+       data = await this.ccxt.createLimitSellOrder (this.pair, roundAmount, roundPrice);
 
        callback(null, data['id']);
     }catch(e){
@@ -232,8 +232,7 @@ Trader.prototype.checkOrder = function(order, callback) {
   (async () => {
     try{
        var data = await this.ccxt.fetchOrder  (order, this.pair);
-       console.log(data);
-       console.log(data['status'] === 'closed' ? true : false);
+
        callback(null, data['status'] === 'closed' ? true : false);
     }catch(e){
        log.error('unable to cancel order', order, '(', e, '), retrying');
