@@ -116,8 +116,8 @@ Trader.prototype.getTicker = function(callback) {
        data = await this.ccxt.fetchTicker(this.pair);
 
        callback(null, {
-         bid: parseFloat(data['ask']),
-         ask: parseFloat(data['bid']),
+         bid: parseFloat(data['bid']),
+         ask: parseFloat(data['ask']),
        });
     }catch(e){
        log.error(e);
