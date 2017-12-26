@@ -33,7 +33,7 @@ var Trader = function(config) {
   var exchange = config.exchange.toLowerCase().substr(5);
 
   this.ccxt = new Ccxt[exchange]({apiKey: this.key, secret: this.secret, uid:this.username, password: this.passphrase});
-  
+
   //Prefetch market
   var retFlag = false;
   (async () => {
@@ -78,10 +78,10 @@ Trader.prototype.getPortfolio = function(callback) {
   (async () => {
     try{
        data = await this.ccxt.fetchBalance();
-       
+
        var assetAmount = data[this.asset]['free'];
        var currencyAmount = data[this.currency]['free'];
-       
+
        if(!_.isNumber(assetAmount) || _.isNaN(assetAmount) ||
           !_.isNumber(currencyAmount) || _.isNaN(currencyAmount)){
          log.info('asset:', this.asset);
@@ -89,12 +89,12 @@ Trader.prototype.getPortfolio = function(callback) {
          log.info('exchange data:', data);
          util.die('Gekko was unable to set the portfolio');
        }
-       
+
        var portfolio = [
          { name: this.asset, amount: assetAmount },
          { name: this.currency, amount: currencyAmount }
        ];
-       
+
        callback(null, portfolio);
     }catch(e){
        log.error(e);
@@ -104,7 +104,7 @@ Trader.prototype.getPortfolio = function(callback) {
     retFlag = true;
   }) ();
   deasync.loopWhile(function(){return !retFlag;});
-  
+
 }
 
 Trader.prototype.getTicker = function(callback) {
@@ -130,7 +130,7 @@ Trader.prototype.getTicker = function(callback) {
 }
 
 Trader.prototype.getFee = function(callback) {
-   //getFee is WIP ccxt side 
+   //getFee is WIP ccxt side
    //See https://github.com/ccxt/ccxt/issues/640
    try{
       var fee = parseFloat(this.ccxt.markets[this.pair]['maker']);
@@ -157,17 +157,17 @@ Trader.prototype.buy = function(amount, price, callback) {
              var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
           }catch(e){
              var roundAmount = amount;
-          }           
+          }
        }
        //Round price
        try{
           var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
        }catch(e){
           var roundPrice = price;
-       }     
-       
-       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency) 
-       
+       }
+
+       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)
+
        data = await this.ccxt.createLimitBuyOrder (this.pair, roundAmount, roundPrice);
 
        callback(null, data['id']);
@@ -203,17 +203,17 @@ Trader.prototype.sell = function(amount, price, callback) {
              var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
           }catch(e){
              var roundAmount = amount;
-          }           
+          }
        }
        //Round price
        try{
           var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
        }catch(e){
           var roundPrice = price;
-       }     
+       }
 
-       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)    
-       
+       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)
+
        data = await this.ccxt.createLimitSellOrder (this.pair, roundAmount, roundPrice);
 
        callback(null, data['id']);
@@ -253,7 +253,7 @@ Trader.prototype.getOrder = function(order, callback) {
        var date = moment(data['timestamp']);
        var price = data['price'];
        var amount = data['amount'];
-       
+
        callback(null, {price, amount, date});
     }catch(e){
        log.error('unable to cancel order', order, '(', e, '), retrying');
@@ -289,8 +289,8 @@ Trader.prototype.getTrades = function(since, callback, descending) {
   var firstFetch = !!since;
 
   var args = _.toArray(arguments);
-  
-                           
+
+
   var retFlag = false;
   (async () => {
     try{
@@ -303,7 +303,7 @@ Trader.prototype.getTrades = function(since, callback, descending) {
           }else{
              uid = trade.id;
           }
-          
+
           return {
             tid: uid,
             amount: +trade.amount,
@@ -334,7 +334,7 @@ Trader.prototype.getTrades = function(since, callback, descending) {
   deasync.loopWhile(function(){return !retFlag;});
 }
 
-                                         
+
 Trader.getCapabilities = function (ccxtSlug) {
    var capabilities =  [ { name: 'ccxt-_1btcxe',
                            slug: 'ccxt-_1btcxe',
@@ -970,7 +970,7 @@ Trader.getCapabilities = function (ccxtSlug) {
                            slug: 'ccxt-luno',
                            currencies: ['IDR', 'MYR', 'NGN', 'ZAR'],
                            assets: ['BTC'],
-                           markets: [{'pair': ['IDR', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['MYR', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['NGN', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['ZAR', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}}],
+                           markets: [{'pair': ['IDR', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['MYR', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['NGN', 'BTC'], 'minimalOrder':{'amount':100000000, 'unit': 'asset'}},{'pair': ['ZAR', 'BTC'], 'minimalOrder':{'amount':0.0005, 'unit': 'asset'}}],
                            requires: ['key', 'secret'],
                            tid: 'tid',
                            providesHistory: 'date',
@@ -1222,8 +1222,8 @@ Trader.getCapabilities = function (ccxtSlug) {
 //Dynamic getCapabilities - takes a minut to load all exchanges (too long)
 Trader.setCapabilities = function (ccxtSlug) {
     var retFlag = false;
-                  
-                                       
+
+
     if(_.isUndefined(ccxtSlug)){
        var ret = [];
        var ccxtExchanges = Ccxt.exchanges;
@@ -1233,18 +1233,18 @@ Trader.setCapabilities = function (ccxtSlug) {
           try {
             Trader = new Ccxt[exchange]();
           } catch (e) {
-            console.log(e); 
+            console.log(e);
             return;
           }
-          
+
           var trader = Trader.describe();
           var capabilities = [];
-          
+
           var arrPair = [];
           var arrAssets = [];
           var arrCurrencies = []
           var markets = null;
-          
+
           if(Trader.hasPublicAPI){ //solve _1broker issue (don't have public API and atm API key is not entered).
              retFlag = false;
              (async () => {
@@ -1259,26 +1259,26 @@ Trader.setCapabilities = function (ccxtSlug) {
              deasync.loopWhile(function(){return !retFlag;});
              arrPair = [];
              if(markets !== null){
-                _.each(markets, market => {  
+                _.each(markets, market => {
                    try{
                       var amountMin = market.limits.amount.min;
                    }catch(e){
                       var amountMin = 1e8;
                    }
-                   arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});  
+                   arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});
                    if(arrAssets.toString().search(market.base) == -1){
                       arrAssets.push(market.base);
                    }
                    if(arrCurrencies.toString().search(market.quote) == -1){
                       arrCurrencies.push(market.quote);
                    }
-                                         
+
                 });
              }
           }
           if(markets !== null){
              capabilities = {
-                name : 'ccxt-' + trader.id, 
+                name : 'ccxt-' + trader.id,
                 slug: 'ccxt-' + trader.id,
                 currencies: arrCurrencies.sort(),
                 assets: arrAssets.sort(),
@@ -1294,7 +1294,7 @@ Trader.setCapabilities = function (ccxtSlug) {
                 tid: 'tid',
                 providesHistory: 'date',
                 providesFullHistory: Trader.fetchTrades ? true : false,
-                tradable: Trader.hasPrivateAPI ? true : false,  
+                tradable: Trader.hasPrivateAPI ? true : false,
              };
              ret.push(capabilities);
           }
@@ -1305,18 +1305,18 @@ Trader.setCapabilities = function (ccxtSlug) {
        try {
          Trader = new Ccxt[ccxtSlug]();
        } catch (e) {
-         console.log(e); 
+         console.log(e);
          return;
        }
-       
+
        var trader = Trader.describe();
        var capabilities = [];
-       
+
        var arrPair = [];
        var arrAssets = [];
        var arrCurrencies = []
        var markets = null;
-       
+
        if(Trader.hasPublicAPI){ //solve _1broker issue (don't have public API and atm API key is not entered).
           retFlag = false;
           (async () => {
@@ -1330,26 +1330,26 @@ Trader.setCapabilities = function (ccxtSlug) {
           deasync.loopWhile(function(){return !retFlag;});
           arrPair = [];
           if(markets !== null){
-             _.each(markets, market => {  
+             _.each(markets, market => {
                 try{
                    var amountMin = market.limits.amount.min;
                 }catch(e){
                    var amountMin = 1e8;
                 }
-                arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});  
+                arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});
                 if(arrAssets.toString().search(market.base) == -1){
                    arrAssets.push(market.base);
                 }
                 if(arrCurrencies.toString().search(market.quote) == -1){
                    arrCurrencies.push(market.quote);
                 }
-                                      
+
              });
           }
        }
        if(markets !== null){
           capabilities = {
-             name : 'ccxt-' + trader.id, 
+             name : 'ccxt-' + trader.id,
              slug: 'ccxt',
              currencies: arrCurrencies.sort(),
              assets: arrAssets.sort(),
@@ -1365,7 +1365,7 @@ Trader.setCapabilities = function (ccxtSlug) {
              tid: 'tid',
              providesHistory: 'date',
              providesFullHistory: Trader.fetchTrades ? true : false,
-             tradable: Trader.hasPrivateAPI ? true : false,  
+             tradable: Trader.hasPrivateAPI ? true : false,
           };
        };
        return capabilities;
