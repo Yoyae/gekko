@@ -4,6 +4,7 @@ var ccxtError = require('../node_modules/ccxt/js/base/errors.js');
 var deasync = require('deasync');
 
 var util = require('../core/util.js');
+var Errors = require('../core/error');
 var _ = require('lodash');
 var moment = require('moment');
 var log = require('../core/log');
@@ -25,6 +26,7 @@ var Trader = function(config) {
     this.asset = config.asset;
   }
   this.name = 'Ccxt';
+  
   this.balance;
   this.price;
 
@@ -33,7 +35,8 @@ var Trader = function(config) {
   var exchange = config.exchange.toLowerCase().substr(5);
 
   this.ccxt = new Ccxt[exchange]({apiKey: this.key, secret: this.secret, uid:this.username, password: this.passphrase});
-
+  this.exchangeName = exchange;
+  
   //Prefetch market
   var retFlag = false;
   (async () => {
@@ -41,96 +44,178 @@ var Trader = function(config) {
         await this.ccxt.loadMarkets();
      }catch(e){
         retFlag = true;
-        console.log('error loading markets : ' + this.name, e);
+        console.log('error loading markets : ' + this.name + '-' + this.exchangeName , e);
      }
      retFlag = true;
   }) ();
   deasync.loopWhile(function(){return !retFlag;});
-  }
-
-// if the exchange errors we try the same call again after
-// waiting 10 seconds
-Trader.prototype.retry = function(method, args) {
-  var wait = +moment.duration(10, 'seconds');
-  log.debug(this.name, 'returned an error, retrying..');
-
-  var self = this;
-
-  // make sure the callback (and any other fn)
-  // is bound to Trader
-  _.each(args, function(arg, i) {
-    if(_.isFunction(arg))
-      args[i] = _.bind(arg, self);
-  });
-
-  // run the failed method again with the same
-  // arguments after wait
-  setTimeout(
-    function() { method.apply(self, args) },
-    wait || 5000
-  );
 }
 
-Trader.prototype.getPortfolio = function(callback) {
-  var args = _.toArray(arguments);
 
-  var retFlag = false;
-  (async () => {
-    try{
-       data = await this.ccxt.fetchBalance();
+var retryCritical = {
+  retries: 10,
+  factor: 1.2,
+  minTimeout: 1 * 1000,
+  maxTimeout: 30 * 1000
+};
 
-       var assetAmount = data[this.asset]['free'];
-       var currencyAmount = data[this.currency]['free'];
+var retryForever = {
+  forever: true,
+  factor: 1.2,
+  minTimeout: 10,
+  maxTimeout: 30
+};
 
-       if(!_.isNumber(assetAmount) || _.isNaN(assetAmount) ||
-          !_.isNumber(currencyAmount) || _.isNaN(currencyAmount)){
-         log.info('asset:', this.asset);
-         log.info('currency:', this.currency);
-         log.info('exchange data:', data);
-         util.die('Gekko was unable to set the portfolio');
-       }
+/** CCXT Error
+ExchangeError -> Retry
+NotSupported -> Abort
+AuthenticationError -> Abort
+InvalidNonce -> Retry
+InsufficientFunds -> Retry
+InvalidOrder -> Abort
+OrderNotFound -> Abort                                                                             
+OrderNotCached -> Abort
+CancelPending -> Abort
+NetworkError -> Retry
+DDoSProtection -> Retry
+RequestTimeout -> Retry
+ExchangeNotAvailable-> Retry
+*/
+Trader.prototype.processError = function(funcName, error) {
+  if (!error) return undefined;
 
-       var portfolio = [
-         { name: this.asset, amount: assetAmount },
-         { name: this.currency, amount: currencyAmount }
-       ];
+  //Handle error here
+  if(error instanceof ccxtError.ExchangeError       ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.NotSupported        ){
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.AuthenticationError ){
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.InvalidNonce        ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.InsufficientFunds   ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.InvalidOrder        ){
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.OrderNotFound       ){  
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  																   
+  }else if(error instanceof ccxtError.OrderNotCached      ){
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.CancelPending       ){
+    log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+    return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.NetworkError        ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.DDoSProtection      ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message); 	
+  }else if(error instanceof ccxtError.RequestTimeout      ){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);  	
+  }else if(error instanceof ccxtError.ExchangeNotAvailable){
+    log.debug(`[ccxt-${this.exchangeName}] (${funcName}) returned an error, retrying: ${error.message}`);
+    return new Errors.RetryError('[ccxt-'+ this.exchangeName + '] ' + error.message);    
+  }else{
+	log.error(`[ccxt-${this.exchangeName}] (${funcName}) returned an irrecoverable error: ${error.message}`);
+	return new Errors.AbortError('[ccxt-'+ this.exchangeName + '] ' + error.message);
+  }
+};
 
-       callback(null, portfolio);
-    }catch(e){
-       log.error(e);
-       retFlag = true;
-       return this.retry(this.getPortfolio, args);
+Trader.prototype.handleResponse = function(funcName, callback) {
+  return (error, body) => {
+    if(!error) {
+      if(_.isEmpty(body))
+        error = new Error('NO DATA WAS RETURNED');
     }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
 
+    return callback(this.processError(funcName, error), body);
+  }
+};
+
+Trader.prototype.getPortfolio = function(callback) {
+
+  var processAttempt = function(ccxt, cb) {
+     
+     (async () => {
+       try{
+          data = await ccxt.fetchBalance();
+          cb(undefined, data);  
+       }catch(e){
+		  log.error(e);
+          cb(e);
+       }
+	 }) ();
+  };
+  
+  var processResult = function (err, data){
+	 if(err) return callback(err);
+	 var assetAmount = data[this.asset]['free'];
+	 var currencyAmount = data[this.currency]['free'];
+     
+	 if(!_.isNumber(assetAmount) || _.isNaN(assetAmount)) {
+       log.error(`[ccxt-${this.exchangeName}] did not return portfolio for ${this.asset}, assuming 0.`);
+       assetAmount = 0;
+     }
+
+     if(!_.isNumber(currencyAmount) || _.isNaN(currencyAmount)) {
+       log.error(`[ccxt-${this.exchangeName}] did not return portfolio for ${this.currency}, assuming 0.`);
+       currencyAmount = 0;
+     }
+     
+	 var portfolio = [
+	 { name: this.asset, amount: assetAmount },
+	 { name: this.currency, amount: currencyAmount }
+	 ];
+     
+	 log.debug('[ccxt-' + this.exchangeName + '] (getPortfolio) portfolio:', portfolio);
+	 callback(undefined, portfolio);     
+  };
+  
+  let handler = (cb) => processAttempt(this.ccxt, this.handleResponse('getPortfolio', cb));
+  util.retryCustom(retryForever, _.bind(handler, this), _.bind(processResult, this));  
 }
 
 Trader.prototype.getTicker = function(callback) {
-  var args = _.toArray(arguments);
 
-  var retFlag = false;
-  (async () => {
-    try{
-       data = await this.ccxt.fetchTicker(this.pair);
-
-       callback(null, {
-         bid: parseFloat(data['bid']),
-         ask: parseFloat(data['ask']),
-       });
-    }catch(e){
-       log.error(e);
-       retFlag = true;
-       return this.retry(this.getTicker, args);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+  var processAttempt = function(ccxt, pair, cb) {
+	  
+     (async () => {
+       try{
+          data = await ccxt.fetchTicker(pair);
+	      cb(undefined, data);
+       }catch(e){
+		  log.error(e);
+	      cb(e);
+       }
+	 }) ();
+  }
+  
+  var processResult = function (err, data){
+	 if(err) return callback(err);
+	 log.debug('ask', parseFloat(data['ask']), 'bid', parseFloat(data['bid']));
+	 
+	 log.debug('[ccxt-' + this.exchangeName + '] (getTicker) ask', parseFloat(data['ask']), 'bid', parseFloat(data['bid']));
+     callback(undefined, {
+	    bid: parseFloat(data['bid']),
+	    ask: parseFloat(data['ask']),
+     });
+  }
+  
+  let handler = (cb) => processAttempt(this.ccxt, this.pair, this.handleResponse('getTicker', cb));
+  util.retryCustom(retryForever, _.bind(handler, this), _.bind(processResult, this));  
 }
 
 Trader.prototype.getFee = function(callback) {
-   //getFee is WIP ccxt side
+   //getFee is WIP ccxt side 
    //See https://github.com/ccxt/ccxt/issues/640
    try{
       var fee = parseFloat(this.ccxt.markets[this.pair]['maker']);
@@ -140,201 +225,291 @@ Trader.prototype.getFee = function(callback) {
    }catch(e){
       var fee = 0.0025; //default
    }
-   callback(false, fee);
+   callback(undefined, fee);
 }
 
 Trader.prototype.buy = function(amount, price, callback) {
-  var args = _.toArray(arguments);
 
-  var retFlag = false;
-  (async () => {
-    try{
-       //Round amount
+   var processAttempt = function(ccxt, amount, price, pair, cb) {
+     
+     (async () => {
+	   //getFee
+	   try{
+		  var fee = parseFloat(this.ccxt.markets[this.pair]['maker']);
+		  if(!_.isNumber(fee) || _.isNaN(fee)){
+			 fee = 0.0025; //default
+		  }
+	   }catch(e){
+		  var fee = 0.0025; //default
+	   }	   
+
+	   //Calculate fee
+	   try{
+		 var calculateFee = (amount * fee);
+	   }catch(e){
+		  var calculateFee = 0;
+	   }
+	   //Round amount
        try{
-         var roundAmount = this.ccxt.amountToLots(this.pair, amount);
+         var roundAmount = ccxt.amountToLots(pair, (amount - calculateFee));
        }catch(e){
            try{
-             var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
+             var roundAmount = ccxt.amountToPrecision(pair, (amount - calculateFee));
           }catch(e){
-             var roundAmount = amount;
-          }
+             var roundAmount = (amount - calculateFee);
+          }           
        }
        //Round price
        try{
-          var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
+          var roundPrice = ccxt.priceToPrecision(pair, price);
        }catch(e){
           var roundPrice = price;
+       }     
+       
+       log.debug('(buy) Rounded price and amount are : ', roundAmount, 'at', roundPrice, 'with', calculateFee, 'fees', '(', pair, ')'); 
+       
+	   try{
+		   data = await ccxt.createLimitBuyOrder (pair, roundAmount, roundPrice);
+		   cb(undefined, data);
+       }catch(e){
+		  log.error(e);
+	      cb(e);
        }
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+    if(err) return callback(err);
+    
+    var txid = data['id'];
+    log.debug('[ccxt-' + this.exchangeName + '] (buy) added order with txid:', txid);
 
-       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)
-
-       data = await this.ccxt.createLimitBuyOrder (this.pair, roundAmount, roundPrice);
-
-       callback(null, data['id']);
-    }catch(e){
-       if(e instanceof ccxtError.InsufficientFunds) {
-          // retry with the already reduced amount, will be reduced again in the recursive call
-          log.error('Error buy ' , 'INSUFFICIENT_FUNDS', e);
-          // correct the amount to avoid an INSUFFICIENT_FUNDS exception
-          var correctedAmount = amount - (0.004*amount);
-          log.debug('buy', 'corrected amount', {amount: correctedAmount, price: price});
-          return this.retry(this.buy, [correctedAmount, price, callback]);
-       }
-       log.error('Error buy', e);
-       retFlag = true;
-       return this.retry(this.buy, args);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+    callback(undefined, txid);
+  };	  
+	  
+  let handler = (cb) => processAttempt(this.ccxt, amount, price, this.pair, this.handleResponse('buy', cb));
+  util.retryCustom(retryCritical, _.bind(handler, this), _.bind(processResult, this));  
 }
 
 Trader.prototype.sell = function(amount, price, callback) {
-  var args = _.toArray(arguments);
-
-  var retFlag = false;
-  (async () => {
-    try{
-       //Round amount
+   var processAttempt = function(ccxt, amount, price, pair, cb) {
+     
+     (async () => {
+	   //getFee
+	   try{
+		  var fee = parseFloat(this.ccxt.markets[this.pair]['maker']);
+		  if(!_.isNumber(fee) || _.isNaN(fee)){
+			 fee = 0.0025; //% default
+		  }
+	   }catch(e){
+		  var fee = 0.0025; //% default
+	   }	
+	   //Calculate fee
+	   try{
+		 var calculateFee = (amount * fee);
+	   }catch(e){
+		  var calculateFee = 0;
+	   }
+	   //Round amount
        try{
-         var roundAmount = this.ccxt.amountToLots(this.pair, amount);
+         var roundAmount = ccxt.amountToLots(pair, (amount - calculateFee));
        }catch(e){
            try{
-             var roundAmount = this.ccxt.amountToPrecision(this.pair, amount);
+             var roundAmount = ccxt.amountToPrecision(pair, (amount - calculateFee));
           }catch(e){
-             var roundAmount = amount;
-          }
+             var roundAmount = (amount - calculateFee);
+          }           
        }
        //Round price
        try{
-          var roundPrice = this.ccxt.priceToPrecision(this.pair, price);
+          var roundPrice = ccxt.priceToPrecision(pair, price);
        }catch(e){
           var roundPrice = price;
+       }     
+       
+       log.debug('(sell) Rounded price and amount are : ', roundAmount, 'at', roundPrice, 'with', calculateFee, 'fees', '(', pair, ')'); 
+       
+	   try{
+		   data = await ccxt.createLimitSellOrder (pair, roundAmount, roundPrice);
+		   cb(undefined, data);
+       }catch(e){
+		  log.error(e);
+	      cb(e);
        }
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+    if(err) return callback(err);
+    
+    var txid = data['id'];
+	if(_.isUndefined(txid))
+		txid = 0; //Order id is undefined, assuming order is already filled. See https://github.com/ccxt/ccxt/issues/660
+    log.debug('[ccxt-' + this.exchangeName + '] (sell) added order with txid:', txid);
 
-       log.debug('Reel price and amount are : ', roundAmount, this.asset, 'at', roundPrice, this.currency)
-
-       data = await this.ccxt.createLimitSellOrder (this.pair, roundAmount, roundPrice);
-
-       callback(null, data['id']);
-    }catch(e){
-       log.error(e);
-       retFlag = true;
-       return this.retry(this.sell, args);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+    callback(undefined, txid);
+  };	  
+	  
+  let handler = (cb) => processAttempt(this.ccxt, amount, price, this.pair, this.handleResponse('sell', cb));
+  util.retryCustom(retryCritical, _.bind(handler, this), _.bind(processResult, this));  
 }
 
 Trader.prototype.checkOrder = function(order, callback) {
-  var retFlag = false;
-  (async () => {
-    try{
-       var data = await this.ccxt.fetchOrder  (order, this.pair);
-
-       callback(null, data['status'] === 'closed' ? true : false);
-    }catch(e){
-       log.error('unable to cancel order', order, '(', e, '), retrying');
-       retFlag = true;
-       return callback(e, undefined);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+   var processAttempt = function(ccxt, order, pair, cb) {
+     
+     (async () => {
+	   try{
+		   var data = await ccxt.fetchOrder(order, pair);
+		   cb(undefined, data);
+       }catch(e){
+		  log.error(e);
+		  if(e instanceof ccxtError.OrderNotCached)
+			cb(undefined, {'status':'closed'});	//If no order found, then order is cancelled or filled.
+		  else{
+			cb(e);
+		  }	      
+       }
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+    if(err) return callback(err);
+	
+	log.debug('[ccxt-' + this.exchangeName + '] (checkOrder) result', data);
+    callback(undefined, data['status'] === 'closed' ? true : false);
+  };	  
+	  
+  let handler = (cb) => processAttempt(this.ccxt, order, this.pair, this.handleResponse('checkOrder', cb));
+  util.retryCustom(retryCritical, _.bind(handler, this), _.bind(processResult, this));  	
 }
 
 Trader.prototype.getOrder = function(order, callback) {
-  var retFlag = false;
-  (async () => {
-    try{
-       var data = await this.ccxt.fetchOrder  (order, this.pair);
-
-       var date = moment(data['timestamp']);
-       var price = data['price'];
-       var amount = data['amount'];
-
-       callback(null, {price, amount, date});
-    }catch(e){
-       log.error('unable to cancel order', order, '(', e, '), retrying');
-       retFlag = true;
-       return callback(e, [0, 0, moment(0)]);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+  var processAttempt = function(ccxt, pair, id, cb) {
+     
+     (async () => {
+	   try{
+		   if(ccxt['has']['fetchMyTrades'] === true){
+			   var orders = await ccxt.fetchMyTrades(pair);
+			   for (let i = 0; i < orders.length; i++) {
+					if (orders[i]['id'] == id){
+						cb(undefined, orders[i]);
+					}
+				}
+				cb(undefined, {'timestamp':0, 'price':0, 'amount':0});	//If no order found, assuming already cancelled or filled.
+		   }else{
+			   var order = await ccxt.fetchOrder(id, pair);
+			   cb(undefined, order);
+		   }		   
+       }catch(e){
+		  log.error(e);
+		  if(e instanceof ccxtError.OrderNotCached)
+			cb(undefined, {'timestamp':0, 'price':0, 'amount':0});	//If no order found, assuming already cancelled or filled.
+		  else
+			cb(e);	      
+       }
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+    if(err) return callback(err);
+	
+	log.debug('[ccxt-' + this.exchangeName + '] (getOrder) result', data);
+	var date = moment(data['timestamp']);
+    var price = data['price'];
+    var amount = data['amount'];
+    
+    callback(undefined, {price, amount, date});	
+  };	  
+	  
+  let handler = (cb) => processAttempt(this.ccxt, this.pair, order, this.handleResponse('getOrder', cb));
+  util.retryCustom(retryCritical, _.bind(handler, this), _.bind(processResult, this));  	
 }
 
 Trader.prototype.cancelOrder = function(order, callback) {
-  var args = _.toArray(arguments);
+  var processAttempt = function(ccxt, cb) {
+     
+     (async () => {
+	   try{
+		   var data = await ccxt.cancelOrder(order);
+		   cb(undefined, data);
+       }catch(e){
+		  log.error(e);
+		  if(e instanceof ccxtError.OrderNotFound)
+			cb(undefined, 1);	//If no order found, then order is cancelled or filled.
+		  else{
+			cb(e);
+		  }	  
+       }
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+	 if(err) 
+		return callback(err);
 
-  var retFlag = false;
-  (async () => {
-    try{
-       await this.ccxt.cancelOrder (order);
-
-       callback();
-    }catch(e){
-       log.error('unable to cancel order', order, '(', e, '), retrying');
-       retFlag = true;
-       return this.retry(this.cancelOrder, args);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+	 log.debug('[ccxt-' + this.exchangeName + '] (cancelOrder) result', data);
+     callback(undefined, data);	
+  };	
+  
+  let handler = (cb) => processAttempt(this.ccxt, this.handleResponse('cancelOrder', cb));
+  util.retryCustom(retryForever, _.bind(handler, this), _.bind(processResult, this));  	
 }
 
 Trader.prototype.getTrades = function(since, callback, descending) {
 
   var firstFetch = !!since;
 
-  var args = _.toArray(arguments);
-
-
-  var retFlag = false;
-  (async () => {
-    try{
-       trades = await this.ccxt.fetchTrades(joinCurrencies(this.asset, this.currency), since);
-       var result = _.map(trades, function(trade) {
-          var uid;
-          //Exchange don't always return id
-          if(_.isUndefined(trade.id)){
-             uid = trade.timestamp;
-          }else{
-             uid = trade.id;
-          }
-
-          return {
-            tid: uid,
-            amount: +trade.amount,
-            date: moment.utc(trade.datetime).unix(),
-            price: +trade.price
-          };
-       });
-       var retValue = undefined;
-       if(result.length > 1){
-          for (let index = 0; index < result.length-1; ++index) {
-             if(result[index]['tid'] != result[index+1]['tid']){
-                retValue = (result[index]['tid'] > result[index+1]['tid'] ? result.reverse() : result);
-                break;
-             }
-          }
+  var processAttempt = function(ccxt, pair, since, cb) {
+     
+     (async () => {
+	   try{
+		   var data = await ccxt.fetchTrades(pair, since);
+		   cb(undefined, data);
+       }catch(e){
+	      cb(e);
        }
-       if(_.isUndefined(retValue)){
-          retValue = result; //There is only one trade or one timestamp
-       }
-       callback(null, retValue);
-    }catch(e){
-       log.error(e);
-       retFlag = true;
-       return this.retry(this.getTrades, args);
-    }
-    retFlag = true;
-  }) ();
-  deasync.loopWhile(function(){return !retFlag;});
+     }) ();
+  };
+  
+  var processResult = function (err, data){
+    if(err) return callback(err);
+
+	var result = _.map(data, function(trade) {
+	     var uid;
+	     //Exchange don't always return id
+	     if(_.isUndefined(trade.id)){
+			uid = trade.timestamp;
+	     }else{
+			uid = trade.id;
+	     }
+	     
+	     return {
+			tid: uid,
+			amount: +trade.amount,
+			date: moment.utc(trade.datetime).unix(),
+			price: +trade.price
+	     };
+	});
+	var retValue = undefined;
+	if(result.length > 1){
+	  for (let index = 0; index < result.length-1; ++index) {
+		 if(result[index]['tid'] != result[index+1]['tid']){
+			retValue = (result[index]['tid'] > result[index+1]['tid'] ? result.reverse() : result);
+			break;
+		 }
+	  }
+	}
+	if(_.isUndefined(retValue)){
+	  retValue = result; //There is only one trade or one timestamp
+	}
+	callback(null, retValue);
+  };	
+  
+  let handler = (cb) => processAttempt(this.ccxt, this.pair, since, this.handleResponse('getTrades', cb));
+  util.retryCustom(retryForever, _.bind(handler, this), _.bind(processResult, this));  	
 }
 
-
+                                         
 Trader.getCapabilities = function (ccxtSlug) {
    var capabilities =  [ { name: 'ccxt-_1btcxe',
                            slug: 'ccxt-_1btcxe',
@@ -519,7 +694,7 @@ Trader.getCapabilities = function (ccxtSlug) {
                          { name: 'ccxt-bittrex',
                            slug: 'ccxt-bittrex',
                            currencies: ['BTC', 'ETH', 'USDT'],
-                           assets: ['1ST', '2GIVE', 'ABY', 'ADA', 'ADT', 'ADX', 'AEON', 'AGRS', 'AMP', 'ANT', 'APX', 'ARDR', 'AUR', 'BAT', 'BAY', 'BCH', 'BCY', 'BITB', 'BLITZ', 'BLK', 'BLOCK', 'BNT', 'BRK', 'BRX', 'BSD', 'BTCD', 'BTG', 'BTS', 'BURST', 'BYC', 'CANN', 'CFI', 'CLAM', 'CLOAK', 'CLUB', 'COVAL', 'CPC', 'CRB', 'CRW', 'CURE', 'CVC', 'DASH', 'DCR', 'DCT', 'DGB', 'DGD', 'DMD', 'DNT', 'DOGE', 'DOPE', 'DTB', 'DYN', 'EBST', 'EDG', 'EFL', 'EGC', 'EMC2', 'ENRG', 'ERC', 'ETC', 'ETH', 'EXCL', 'EXP', 'FAIR', 'FCT', 'FLDC', 'FLO', 'FTC', 'FUN', 'GAME', 'GBG', 'GBYTE', 'GCR', 'GEO', 'GLD', 'GNO', 'GNT', 'GOLOS', 'GRC', 'GRS', 'GUP', 'HMQ', 'INCNT', 'INFX', 'IOC', 'ION', 'IOP', 'KMD', 'KORE', 'LBC', 'LGD', 'LMC', 'LSK', 'LTC', 'LUN', 'MAID', 'MANA', 'MCO', 'MEME', 'MER', 'MLN', 'MONA', 'MTL', 'MUE', 'MUSIC', 'MYST', 'NAV', 'NBT', 'NEOS', 'NLG', 'NMR', 'NXC', 'NXS', 'NXT', 'OK', 'OMG', 'OMNI', 'PART', 'PAY', 'PDC', 'PINK', 'PIVX', 'PKB', 'POT', 'POWR', 'PPC', 'PTC', 'PTOY', 'QRL', 'QTUM', 'QWARK', 'RADS', 'RBY', 'RCN', 'RDD', 'REP', 'RISE', 'RLC', 'SAFEX', 'SALT', 'SBD', 'SC', 'SEQ', 'SHIFT', 'SIB', 'SLR', 'SLS', 'SNGLS', 'SNRG', 'SNT', 'SPHR', 'SPR', 'START', 'STEEM', 'STORJ', 'STRAT', 'SWIFT', 'SWT', 'SYNX', 'SYS', 'THC', 'TIME', 'TIX', 'TKN', 'TKS', 'TRIG', 'TRST', 'TRUST', 'TX', 'UBQ', 'UNB', 'VIA', 'VIB', 'VOX', 'VRC', 'VRM', 'VTC', 'VTR', 'WAVES', 'WINGS', 'XAUR', 'XCP', 'XDN', 'XEL', 'XEM', 'XLM', 'XMG', 'XMR', 'XMY', 'XRP', 'XST', 'XVC', 'XVG', 'XWC', 'XZC', 'ZCL', 'ZEC', 'ZEN'],
+                           assets: ['1ST', '2GIVE', 'ABY', 'ADA', 'ADT', 'ADX', 'AEON', 'AGRS', 'AMP', 'ANT', 'APX', 'ARDR', 'AUR', 'BAT', 'BAY', 'BCH', 'BCY', 'BITB', 'BLITZ', 'BLK', 'BLOCK', 'BNT', 'BRK', 'BRX', 'BSD', 'BTC', 'BTCD', 'BTG', 'BTS', 'BURST', 'BYC', 'CANN', 'CFI', 'CLAM', 'CLOAK', 'CLUB', 'COVAL', 'CPC', 'CRB', 'CRW', 'CURE', 'CVC', 'DASH', 'DCR', 'DCT', 'DGB', 'DGD', 'DMD', 'DNT', 'DOGE', 'DOPE', 'DTB', 'DYN', 'EBST', 'EDG', 'EFL', 'EGC', 'EMC2', 'ENRG', 'ERC', 'ETC', 'ETH', 'EXCL', 'EXP', 'FAIR', 'FCT', 'FLDC', 'FLO', 'FTC', 'FUN', 'GAME', 'GBG', 'GBYTE', 'GCR', 'GEO', 'GLD', 'GNO', 'GNT', 'GOLOS', 'GRC', 'GRS', 'GUP', 'HMQ', 'INCNT', 'INFX', 'IOC', 'ION', 'IOP', 'KMD', 'KORE', 'LBC', 'LGD', 'LMC', 'LSK', 'LTC', 'LUN', 'MAID', 'MANA', 'MCO', 'MEME', 'MER', 'MLN', 'MONA', 'MTL', 'MUE', 'MUSIC', 'MYST', 'NAV', 'NBT', 'NEOS', 'NLG', 'NMR', 'NXC', 'NXS', 'NXT', 'OK', 'OMG', 'OMNI', 'PART', 'PAY', 'PDC', 'PINK', 'PIVX', 'PKB', 'POT', 'POWR', 'PPC', 'PTC', 'PTOY', 'QRL', 'QTUM', 'QWARK', 'RADS', 'RBY', 'RCN', 'RDD', 'REP', 'RISE', 'RLC', 'SAFEX', 'SALT', 'SBD', 'SC', 'SEQ', 'SHIFT', 'SIB', 'SLR', 'SLS', 'SNGLS', 'SNRG', 'SNT', 'SPHR', 'SPR', 'START', 'STEEM', 'STORJ', 'STRAT', 'SWIFT', 'SWT', 'SYNX', 'SYS', 'THC', 'TIME', 'TIX', 'TKN', 'TKS', 'TRIG', 'TRST', 'TRUST', 'TX', 'UBQ', 'UNB', 'VIA', 'VIB', 'VOX', 'VRC', 'VRM', 'VTC', 'VTR', 'WAVES', 'WINGS', 'XAUR', 'XCP', 'XDN', 'XEL', 'XEM', 'XLM', 'XMG', 'XMR', 'XMY', 'XRP', 'XST', 'XVC', 'XVG', 'XWC', 'XZC', 'ZCL', 'ZEC', 'ZEN'],
                            markets: [{'pair': ['BTC', '1ST'], 'minimalOrder':{'amount':5.70255474, 'unit': 'asset'}},{'pair': ['BTC', '2GIVE'], 'minimalOrder':{'amount':320.51282051, 'unit': 'asset'}},{'pair': ['BTC', 'ABY'], 'minimalOrder':{'amount':342.46575342, 'unit': 'asset'}},{'pair': ['BTC', 'ADA'], 'minimalOrder':{'amount':74.4047619, 'unit': 'asset'}},{'pair': ['BTC', 'ADT'], 'minimalOrder':{'amount':102.88065844, 'unit': 'asset'}},{'pair': ['BTC', 'ADX'], 'minimalOrder':{'amount':1.8108069, 'unit': 'asset'}},{'pair': ['BTC', 'AEON'], 'minimalOrder':{'amount':0.86180151, 'unit': 'asset'}},{'pair': ['BTC', 'AGRS'], 'minimalOrder':{'amount':5.31801744, 'unit': 'asset'}},{'pair': ['BTC', 'AMP'], 'minimalOrder':{'amount':12.57545272, 'unit': 'asset'}},{'pair': ['BTC', 'ANT'], 'minimalOrder':{'amount':1.26582278, 'unit': 'asset'}},{'pair': ['BTC', 'APX'], 'minimalOrder':{'amount':0.26913554, 'unit': 'asset'}},{'pair': ['BTC', 'ARDR'], 'minimalOrder':{'amount':7.93650794, 'unit': 'asset'}},{'pair': ['BTC', 'ARK'], 'minimalOrder':{'amount':0.58411215, 'unit': 'asset'}},{'pair': ['BTC', 'AUR'], 'minimalOrder':{'amount':3.04506699, 'unit': 'asset'}},{'pair': ['BTC', 'BAT'], 'minimalOrder':{'amount':11.63331782, 'unit': 'asset'}},{'pair': ['BTC', 'BAY'], 'minimalOrder':{'amount':42.73504274, 'unit': 'asset'}},{'pair': ['BTC', 'BCH'], 'minimalOrder':{'amount':0.00161862, 'unit': 'asset'}},{'pair': ['BTC', 'BCY'], 'minimalOrder':{'amount':6.53936699, 'unit': 'asset'}},{'pair': ['BTC', 'BITB'], 'minimalOrder':{'amount':625, 'unit': 'asset'}},{'pair': ['BTC', 'BLITZ'], 'minimalOrder':{'amount':2.17089267, 'unit': 'asset'}},{'pair': ['BTC', 'BLK'], 'minimalOrder':{'amount':7.80518264, 'unit': 'asset'}},{'pair': ['BTC', 'BLOCK'], 'minimalOrder':{'amount':0.08708799, 'unit': 'asset'}},{'pair': ['BTC', 'BNT'], 'minimalOrder':{'amount':0.88208313, 'unit': 'asset'}},{'pair': ['BTC', 'BRK'], 'minimalOrder':{'amount':11.57943492, 'unit': 'asset'}},{'pair': ['BTC', 'BRX'], 'minimalOrder':{'amount':3.5837156, 'unit': 'asset'}},{'pair': ['BTC', 'BSD'], 'minimalOrder':{'amount':2.31010904, 'unit': 'asset'}},{'pair': ['BTC', 'BTCD'], 'minimalOrder':{'amount':0.01634094, 'unit': 'asset'}},{'pair': ['BTC', 'BTG'], 'minimalOrder':{'amount':1e-8, 'unit': 'asset'}},{'pair': ['BTC', 'BTS'], 'minimalOrder':{'amount':28.21670429, 'unit': 'asset'}},{'pair': ['BTC', 'BURST'], 'minimalOrder':{'amount':324.67532468, 'unit': 'asset'}},{'pair': ['BTC', 'BYC'], 'minimalOrder':{'amount':3.16455696, 'unit': 'asset'}},{'pair': ['BTC', 'CANN'], 'minimalOrder':{'amount':71.02272727, 'unit': 'asset'}},{'pair': ['BTC', 'CFI'], 'minimalOrder':{'amount':20.92050209, 'unit': 'asset'}},{'pair': ['BTC', 'CLAM'], 'minimalOrder':{'amount':0.35637919, 'unit': 'asset'}},{'pair': ['BTC', 'CLOAK'], 'minimalOrder':{'amount':0.31171292, 'unit': 'asset'}},{'pair': ['BTC', 'CLUB'], 'minimalOrder':{'amount':0.86011147, 'unit': 'asset'}},{'pair': ['BTC', 'COVAL'], 'minimalOrder':{'amount':423.72881356, 'unit': 'asset'}},{'pair': ['BTC', 'CPC'], 'minimalOrder':{'amount':5.74184658, 'unit': 'asset'}},{'pair': ['BTC', 'CRB'], 'minimalOrder':{'amount':6.16979269, 'unit': 'asset'}},{'pair': ['BTC', 'CRW'], 'minimalOrder':{'amount':1.48060409, 'unit': 'asset'}},{'pair': ['BTC', 'CURE'], 'minimalOrder':{'amount':6.67378537, 'unit': 'asset'}},{'pair': ['BTC', 'CVC'], 'minimalOrder':{'amount':6.59630607, 'unit': 'asset'}},{'pair': ['BTC', 'DASH'], 'minimalOrder':{'amount':0.00433285, 'unit': 'asset'}},{'pair': ['BTC', 'DCR'], 'minimalOrder':{'amount':0.05364795, 'unit': 'asset'}},{'pair': ['BTC', 'DCT'], 'minimalOrder':{'amount':3.84852217, 'unit': 'asset'}},{'pair': ['BTC', 'DGB'], 'minimalOrder':{'amount':215.51724138, 'unit': 'asset'}},{'pair': ['BTC', 'DGD'], 'minimalOrder':{'amount':0.02768286, 'unit': 'asset'}},{'pair': ['BTC', 'DMD'], 'minimalOrder':{'amount':0.19092568, 'unit': 'asset'}},{'pair': ['BTC', 'DNT'], 'minimalOrder':{'amount':46.72897196, 'unit': 'asset'}},{'pair': ['BTC', 'DOGE'], 'minimalOrder':{'amount':1388.88888889, 'unit': 'asset'}},{'pair': ['BTC', 'DOPE'], 'minimalOrder':{'amount':91.57509158, 'unit': 'asset'}},{'pair': ['BTC', 'DTB'], 'minimalOrder':{'amount':5.28429508, 'unit': 'asset'}},{'pair': ['BTC', 'DYN'], 'minimalOrder':{'amount':0.5629236, 'unit': 'asset'}},{'pair': ['BTC', 'EBST'], 'minimalOrder':{'amount':18.61504095, 'unit': 'asset'}},{'pair': ['BTC', 'EDG'], 'minimalOrder':{'amount':2.88250894, 'unit': 'asset'}},{'pair': ['BTC', 'EFL'], 'minimalOrder':{'amount':13.29080276, 'unit': 'asset'}},{'pair': ['BTC', 'EGC'], 'minimalOrder':{'amount':8.06711843, 'unit': 'asset'}},{'pair': ['BTC', 'EMC'], 'minimalOrder':{'amount':2.65392781, 'unit': 'asset'}},{'pair': ['BTC', 'EMC2'], 'minimalOrder':{'amount':16.44736842, 'unit': 'asset'}},{'pair': ['BTC', 'ENRG'], 'minimalOrder':{'amount':18.32844575, 'unit': 'asset'}},{'pair': ['BTC', 'ERC'], 'minimalOrder':{'amount':3.77187689, 'unit': 'asset'}},{'pair': ['BTC', 'ETC'], 'minimalOrder':{'amount':0.10843211, 'unit': 'asset'}},{'pair': ['BTC', 'ETH'], 'minimalOrder':{'amount':0.00519751, 'unit': 'asset'}},{'pair': ['BTC', 'EXCL'], 'minimalOrder':{'amount':1.67280027, 'unit': 'asset'}},{'pair': ['BTC', 'EXP'], 'minimalOrder':{'amount':1.08455165, 'unit': 'asset'}},{'pair': ['BTC', 'FAIR'], 'minimalOrder':{'amount':1.94749552, 'unit': 'asset'}},{'pair': ['BTC', 'FCT'], 'minimalOrder':{'amount':0.1020554, 'unit': 'asset'}},{'pair': ['BTC', 'FLDC'], 'minimalOrder':{'amount':203.25203252, 'unit': 'asset'}},{'pair': ['BTC', 'FLO'], 'minimalOrder':{'amount':27.77777778, 'unit': 'asset'}},{'pair': ['BTC', 'FTC'], 'minimalOrder':{'amount':15.29051988, 'unit': 'asset'}},{'pair': ['BTC', 'FUN'], 'minimalOrder':{'amount':120.77294686, 'unit': 'asset'}},{'pair': ['BTC', 'GAM'], 'minimalOrder':{'amount':0.28409091, 'unit': 'asset'}},{'pair': ['BTC', 'GAME'], 'minimalOrder':{'amount':1.00522718, 'unit': 'asset'}},{'pair': ['BTC', 'GBG'], 'minimalOrder':{'amount':20, 'unit': 'asset'}},{'pair': ['BTC', 'GBYTE'], 'minimalOrder':{'amount':0.00833333, 'unit': 'asset'}},{'pair': ['BTC', 'GCR'], 'minimalOrder':{'amount':39.8089172, 'unit': 'asset'}},{'pair': ['BTC', 'GEO'], 'minimalOrder':{'amount':1.86608942, 'unit': 'asset'}},{'pair': ['BTC', 'GLD'], 'minimalOrder':{'amount':12.02501203, 'unit': 'asset'}},{'pair': ['BTC', 'GNO'], 'minimalOrder':{'amount':0.02777716, 'unit': 'asset'}},{'pair': ['BTC', 'GNT'], 'minimalOrder':{'amount':9.08760451, 'unit': 'asset'}},{'pair': ['BTC', 'GOLOS'], 'minimalOrder':{'amount':16.81237391, 'unit': 'asset'}},{'pair': ['BTC', 'GRC'], 'minimalOrder':{'amount':48.26254826, 'unit': 'asset'}},{'pair': ['BTC', 'GRS'], 'minimalOrder':{'amount':3.28947368, 'unit': 'asset'}},{'pair': ['BTC', 'GUP'], 'minimalOrder':{'amount':8.62663906, 'unit': 'asset'}},{'pair': ['BTC', 'HMQ'], 'minimalOrder':{'amount':20.78137988, 'unit': 'asset'}},{'pair': ['BTC', 'INCNT'], 'minimalOrder':{'amount':11.89909567, 'unit': 'asset'}},{'pair': ['BTC', 'INFX'], 'minimalOrder':{'amount':2.94394724, 'unit': 'asset'}},{'pair': ['BTC', 'IOC'], 'minimalOrder':{'amount':0.7575528, 'unit': 'asset'}},{'pair': ['BTC', 'ION'], 'minimalOrder':{'amount':1.6333464, 'unit': 'asset'}},{'pair': ['BTC', 'IOP'], 'minimalOrder':{'amount':0.78129883, 'unit': 'asset'}},{'pair': ['BTC', 'KMD'], 'minimalOrder':{'amount':0.82904991, 'unit': 'asset'}},{'pair': ['BTC', 'KORE'], 'minimalOrder':{'amount':0.58139535, 'unit': 'asset'}},{'pair': ['BTC', 'LBC'], 'minimalOrder':{'amount':9.9009901, 'unit': 'asset'}},{'pair': ['BTC', 'LGD'], 'minimalOrder':{'amount':2.26490306, 'unit': 'asset'}},{'pair': ['BTC', 'LMC'], 'minimalOrder':{'amount':41.80602007, 'unit': 'asset'}},{'pair': ['BTC', 'LSK'], 'minimalOrder':{'amount':0.1918502, 'unit': 'asset'}},{'pair': ['BTC', 'LTC'], 'minimalOrder':{'amount':0.02784181, 'unit': 'asset'}},{'pair': ['BTC', 'LUN'], 'minimalOrder':{'amount':0.41646538, 'unit': 'asset'}},{'pair': ['BTC', 'MAID'], 'minimalOrder':{'amount':4.87709715, 'unit': 'asset'}},{'pair': ['BTC', 'MANA'], 'minimalOrder':{'amount':144.50867052, 'unit': 'asset'}},{'pair': ['BTC', 'MCO'], 'minimalOrder':{'amount':0.3410362, 'unit': 'asset'}},{'pair': ['BTC', 'MEME'], 'minimalOrder':{'amount':8.58221765, 'unit': 'asset'}},{'pair': ['BTC', 'MER'], 'minimalOrder':{'amount':13.91207568, 'unit': 'asset'}},{'pair': ['BTC', 'MLN'], 'minimalOrder':{'amount':0.03044251, 'unit': 'asset'}},{'pair': ['BTC', 'MONA'], 'minimalOrder':{'amount':0.62084037, 'unit': 'asset'}},{'pair': ['BTC', 'MTL'], 'minimalOrder':{'amount':0.44288549, 'unit': 'asset'}},{'pair': ['BTC', 'MUE'], 'minimalOrder':{'amount':18.69857891, 'unit': 'asset'}},{'pair': ['BTC', 'MUSIC'], 'minimalOrder':{'amount':156.25, 'unit': 'asset'}},{'pair': ['BTC', 'MYST'], 'minimalOrder':{'amount':3.46981263, 'unit': 'asset'}},{'pair': ['BTC', 'NAV'], 'minimalOrder':{'amount':2.23553608, 'unit': 'asset'}},{'pair': ['BTC', 'NBT'], 'minimalOrder':{'amount':1.94280385, 'unit': 'asset'}},{'pair': ['BTC', 'NEO'], 'minimalOrder':{'amount':0.04612546, 'unit': 'asset'}},{'pair': ['BTC', 'NEOS'], 'minimalOrder':{'amount':0.73529412, 'unit': 'asset'}},{'pair': ['BTC', 'NLG'], 'minimalOrder':{'amount':23.14814815, 'unit': 'asset'}},{'pair': ['BTC', 'NMR'], 'minimalOrder':{'amount':0.16847042, 'unit': 'asset'}},{'pair': ['BTC', 'NXC'], 'minimalOrder':{'amount':11.84834123, 'unit': 'asset'}},{'pair': ['BTC', 'NXS'], 'minimalOrder':{'amount':1.84501845, 'unit': 'asset'}},{'pair': ['BTC', 'NXT'], 'minimalOrder':{'amount':24.08477842, 'unit': 'asset'}},{'pair': ['BTC', 'OK'], 'minimalOrder':{'amount':4.48028674, 'unit': 'asset'}},{'pair': ['BTC', 'OMG'], 'minimalOrder':{'amount':0.23364486, 'unit': 'asset'}},{'pair': ['BTC', 'OMNI'], 'minimalOrder':{'amount':0.08380853, 'unit': 'asset'}},{'pair': ['BTC', 'PART'], 'minimalOrder':{'amount':0.22349365, 'unit': 'asset'}},{'pair': ['BTC', 'PAY'], 'minimalOrder':{'amount':1.14395534, 'unit': 'asset'}},{'pair': ['BTC', 'PDC'], 'minimalOrder':{'amount':16.31853786, 'unit': 'asset'}},{'pair': ['BTC', 'PINK'], 'minimalOrder':{'amount':87.41258741, 'unit': 'asset'}},{'pair': ['BTC', 'PIVX'], 'minimalOrder':{'amount':0.6234414, 'unit': 'asset'}},{'pair': ['BTC', 'PKB'], 'minimalOrder':{'amount':3.26583932, 'unit': 'asset'}},{'pair': ['BTC', 'POT'], 'minimalOrder':{'amount':15.11487304, 'unit': 'asset'}},{'pair': ['BTC', 'POWR'], 'minimalOrder':{'amount':5.95805529, 'unit': 'asset'}},{'pair': ['BTC', 'PPC'], 'minimalOrder':{'amount':1.2032536, 'unit': 'asset'}},{'pair': ['BTC', 'PTC'], 'minimalOrder':{'amount':57.73672055, 'unit': 'asset'}},{'pair': ['BTC', 'PTOY'], 'minimalOrder':{'amount':12.15362178, 'unit': 'asset'}},{'pair': ['BTC', 'QRL'], 'minimalOrder':{'amount':2.88716942, 'unit': 'asset'}},{'pair': ['BTC', 'QTUM'], 'minimalOrder':{'amount':0.14037925, 'unit': 'asset'}},{'pair': ['BTC', 'QWARK'], 'minimalOrder':{'amount':14.09244645, 'unit': 'asset'}},{'pair': ['BTC', 'RADS'], 'minimalOrder':{'amount':0.49971017, 'unit': 'asset'}},{'pair': ['BTC', 'RBY'], 'minimalOrder':{'amount':2.64690312, 'unit': 'asset'}},{'pair': ['BTC', 'RCN'], 'minimalOrder':{'amount':19.70055162, 'unit': 'asset'}},{'pair': ['BTC', 'RDD'], 'minimalOrder':{'amount':1923.07692308, 'unit': 'asset'}},{'pair': ['BTC', 'REP'], 'minimalOrder':{'amount':0.09447617, 'unit': 'asset'}},{'pair': ['BTC', 'RISE'], 'minimalOrder':{'amount':7.46268657, 'unit': 'asset'}},{'pair': ['BTC', 'RLC'], 'minimalOrder':{'amount':3.42278204, 'unit': 'asset'}},{'pair': ['BTC', 'SAFEX'], 'minimalOrder':{'amount':225.22522523, 'unit': 'asset'}},{'pair': ['BTC', 'SALT'], 'minimalOrder':{'amount':0.49701789, 'unit': 'asset'}},{'pair': ['BTC', 'SBD'], 'minimalOrder':{'amount':1.94024059, 'unit': 'asset'}},{'pair': ['BTC', 'SC'], 'minimalOrder':{'amount':462.96296296, 'unit': 'asset'}},{'pair': ['BTC', 'SEQ'], 'minimalOrder':{'amount':13.69863014, 'unit': 'asset'}},{'pair': ['BTC', 'SHIFT'], 'minimalOrder':{'amount':1.56240235, 'unit': 'asset'}},{'pair': ['BTC', 'SIB'], 'minimalOrder':{'amount':1.544831, 'unit': 'asset'}},{'pair': ['BTC', 'SLR'], 'minimalOrder':{'amount':3.89954765, 'unit': 'asset'}},{'pair': ['BTC', 'SLS'], 'minimalOrder':{'amount':0.14381371, 'unit': 'asset'}},{'pair': ['BTC', 'SNGLS'], 'minimalOrder':{'amount':14.38434983, 'unit': 'asset'}},{'pair': ['BTC', 'SNRG'], 'minimalOrder':{'amount':1.32023659, 'unit': 'asset'}},{'pair': ['BTC', 'SNT'], 'minimalOrder':{'amount':64.76683938, 'unit': 'asset'}},{'pair': ['BTC', 'SPHR'], 'minimalOrder':{'amount':0.67558438, 'unit': 'asset'}},{'pair': ['BTC', 'SPR'], 'minimalOrder':{'amount':7.1942446, 'unit': 'asset'}},{'pair': ['BTC', 'START'], 'minimalOrder':{'amount':43.32755633, 'unit': 'asset'}},{'pair': ['BTC', 'STEEM'], 'minimalOrder':{'amount':2.09485504, 'unit': 'asset'}},{'pair': ['BTC', 'STORJ'], 'minimalOrder':{'amount':2.97796307, 'unit': 'asset'}},{'pair': ['BTC', 'STRAT'], 'minimalOrder':{'amount':0.54993401, 'unit': 'asset'}},{'pair': ['BTC', 'SWIFT'], 'minimalOrder':{'amount':1.88097209, 'unit': 'asset'}},{'pair': ['BTC', 'SWT'], 'minimalOrder':{'amount':0.93168859, 'unit': 'asset'}},{'pair': ['BTC', 'SYNX'], 'minimalOrder':{'amount':8.24266403, 'unit': 'asset'}},{'pair': ['BTC', 'SYS'], 'minimalOrder':{'amount':9.1877986, 'unit': 'asset'}},{'pair': ['BTC', 'THC'], 'minimalOrder':{'amount':112.61261261, 'unit': 'asset'}},{'pair': ['BTC', 'TIME'], 'minimalOrder':{'amount':0.07726781, 'unit': 'asset'}},{'pair': ['BTC', 'TIX'], 'minimalOrder':{'amount':11.71508903, 'unit': 'asset'}},{'pair': ['BTC', 'TKN'], 'minimalOrder':{'amount':1.52123646, 'unit': 'asset'}},{'pair': ['BTC', 'TKS'], 'minimalOrder':{'amount':1.14615808, 'unit': 'asset'}},{'pair': ['BTC', 'TRIG'], 'minimalOrder':{'amount':3.47947112, 'unit': 'asset'}},{'pair': ['BTC', 'TRST'], 'minimalOrder':{'amount':7.35294118, 'unit': 'asset'}},{'pair': ['BTC', 'TRUST'], 'minimalOrder':{'amount':17.86990708, 'unit': 'asset'}},{'pair': ['BTC', 'TX'], 'minimalOrder':{'amount':1.11831805, 'unit': 'asset'}},{'pair': ['BTC', 'UBQ'], 'minimalOrder':{'amount':1.46224484, 'unit': 'asset'}},{'pair': ['BTC', 'UNB'], 'minimalOrder':{'amount':6.45327827, 'unit': 'asset'}},{'pair': ['BTC', 'VIA'], 'minimalOrder':{'amount':1.34509846, 'unit': 'asset'}},{'pair': ['BTC', 'VIB'], 'minimalOrder':{'amount':15.74307305, 'unit': 'asset'}},{'pair': ['BTC', 'VOX'], 'minimalOrder':{'amount':45.53734062, 'unit': 'asset'}},{'pair': ['BTC', 'VRC'], 'minimalOrder':{'amount':3.93391031, 'unit': 'asset'}},{'pair': ['BTC', 'VRM'], 'minimalOrder':{'amount':0.79615299, 'unit': 'asset'}},{'pair': ['BTC', 'VTC'], 'minimalOrder':{'amount':0.44782001, 'unit': 'asset'}},{'pair': ['BTC', 'VTR'], 'minimalOrder':{'amount':9.89707047, 'unit': 'asset'}},{'pair': ['BTC', 'WAVES'], 'minimalOrder':{'amount':0.35602392, 'unit': 'asset'}},{'pair': ['BTC', 'WINGS'], 'minimalOrder':{'amount':3.90320062, 'unit': 'asset'}},{'pair': ['BTC', 'XAUR'], 'minimalOrder':{'amount':11.50483203, 'unit': 'asset'}},{'pair': ['BTC', 'XCP'], 'minimalOrder':{'amount':0.12327051, 'unit': 'asset'}},{'pair': ['BTC', 'XDN'], 'minimalOrder':{'amount':892.85714286, 'unit': 'asset'}},{'pair': ['BTC', 'XEL'], 'minimalOrder':{'amount':7.51653638, 'unit': 'asset'}},{'pair': ['BTC', 'XEM'], 'minimalOrder':{'amount':9.87361769, 'unit': 'asset'}},{'pair': ['BTC', 'XLM'], 'minimalOrder':{'amount':52.85412262, 'unit': 'asset'}},{'pair': ['BTC', 'XMG'], 'minimalOrder':{'amount':7.57575758, 'unit': 'asset'}},{'pair': ['BTC', 'XMR'], 'minimalOrder':{'amount':0.01470588, 'unit': 'asset'}},{'pair': ['BTC', 'XMY'], 'minimalOrder':{'amount':625, 'unit': 'asset'}},{'pair': ['BTC', 'XRP'], 'minimalOrder':{'amount':8.53533629, 'unit': 'asset'}},{'pair': ['BTC', 'XST'], 'minimalOrder':{'amount':7.45156483, 'unit': 'asset'}},{'pair': ['BTC', 'XVC'], 'minimalOrder':{'amount':2.31074961, 'unit': 'asset'}},{'pair': ['BTC', 'XVG'], 'minimalOrder':{'amount':312.5, 'unit': 'asset'}},{'pair': ['BTC', 'XWC'], 'minimalOrder':{'amount':34.43526171, 'unit': 'asset'}},{'pair': ['BTC', 'XZC'], 'minimalOrder':{'amount':0.0814879, 'unit': 'asset'}},{'pair': ['BTC', 'ZCL'], 'minimalOrder':{'amount':1.09524227, 'unit': 'asset'}},{'pair': ['BTC', 'ZEC'], 'minimalOrder':{'amount':0.00646468, 'unit': 'asset'}},{'pair': ['BTC', 'ZEN'], 'minimalOrder':{'amount':0.08802817, 'unit': 'asset'}},{'pair': ['ETH', '1ST'], 'minimalOrder':{'amount':5.45042295, 'unit': 'asset'}},{'pair': ['ETH', 'ADT'], 'minimalOrder':{'amount':99.74067425, 'unit': 'asset'}},{'pair': ['ETH', 'ADX'], 'minimalOrder':{'amount':1.75438596, 'unit': 'asset'}},{'pair': ['ETH', 'ANT'], 'minimalOrder':{'amount':1.22211142, 'unit': 'asset'}},{'pair': ['ETH', 'BAT'], 'minimalOrder':{'amount':11.36337811, 'unit': 'asset'}},{'pair': ['ETH', 'BCH'], 'minimalOrder':{'amount':0.00158378, 'unit': 'asset'}},{'pair': ['ETH', 'BNT'], 'minimalOrder':{'amount':0.83347225, 'unit': 'asset'}},{'pair': ['ETH', 'BTG'], 'minimalOrder':{'amount':1e-8, 'unit': 'asset'}},{'pair': ['ETH', 'BTS'], 'minimalOrder':{'amount':32.95544424, 'unit': 'asset'}},{'pair': ['ETH', 'CFI'], 'minimalOrder':{'amount':19.9012896, 'unit': 'asset'}},{'pair': ['ETH', 'CRB'], 'minimalOrder':{'amount':5.97671472, 'unit': 'asset'}},{'pair': ['ETH', 'CVC'], 'minimalOrder':{'amount':6.41009205, 'unit': 'asset'}},{'pair': ['ETH', 'DASH'], 'minimalOrder':{'amount':0.00416723, 'unit': 'asset'}},{'pair': ['ETH', 'DGB'], 'minimalOrder':{'amount':209.90764064, 'unit': 'asset'}},{'pair': ['ETH', 'DGD'], 'minimalOrder':{'amount':0.02688357, 'unit': 'asset'}},{'pair': ['ETH', 'DNT'], 'minimalOrder':{'amount':43.90586582, 'unit': 'asset'}},{'pair': ['ETH', 'ETC'], 'minimalOrder':{'amount':0.10482574, 'unit': 'asset'}},{'pair': ['ETH', 'FCT'], 'minimalOrder':{'amount':0.09803922, 'unit': 'asset'}},{'pair': ['ETH', 'FUN'], 'minimalOrder':{'amount':116.22501162, 'unit': 'asset'}},{'pair': ['ETH', 'GNO'], 'minimalOrder':{'amount':0.02674668, 'unit': 'asset'}},{'pair': ['ETH', 'GNT'], 'minimalOrder':{'amount':8.64707815, 'unit': 'asset'}},{'pair': ['ETH', 'GUP'], 'minimalOrder':{'amount':9.28936368, 'unit': 'asset'}},{'pair': ['ETH', 'HMQ'], 'minimalOrder':{'amount':19.22411473, 'unit': 'asset'}},{'pair': ['ETH', 'LGD'], 'minimalOrder':{'amount':2.17391304, 'unit': 'asset'}},{'pair': ['ETH', 'LTC'], 'minimalOrder':{'amount':0.02669794, 'unit': 'asset'}},{'pair': ['ETH', 'LUN'], 'minimalOrder':{'amount':0.40262414, 'unit': 'asset'}},{'pair': ['ETH', 'MANA'], 'minimalOrder':{'amount':139.27576602, 'unit': 'asset'}},{'pair': ['ETH', 'MCO'], 'minimalOrder':{'amount':0.33333311, 'unit': 'asset'}},{'pair': ['ETH', 'MTL'], 'minimalOrder':{'amount':0.42738513, 'unit': 'asset'}},{'pair': ['ETH', 'MYST'], 'minimalOrder':{'amount':3.30906684, 'unit': 'asset'}},{'pair': ['ETH', 'NEO'], 'minimalOrder':{'amount':0.04385968, 'unit': 'asset'}},{'pair': ['ETH', 'NMR'], 'minimalOrder':{'amount':0.16100861, 'unit': 'asset'}},{'pair': ['ETH', 'OMG'], 'minimalOrder':{'amount':0.22823984, 'unit': 'asset'}},{'pair': ['ETH', 'PAY'], 'minimalOrder':{'amount':1.10861795, 'unit': 'asset'}},{'pair': ['ETH', 'POWR'], 'minimalOrder':{'amount':5.64385046, 'unit': 'asset'}},{'pair': ['ETH', 'PTOY'], 'minimalOrder':{'amount':11.69645364, 'unit': 'asset'}},{'pair': ['ETH', 'QRL'], 'minimalOrder':{'amount':2.79507619, 'unit': 'asset'}},{'pair': ['ETH', 'QTUM'], 'minimalOrder':{'amount':0.135318, 'unit': 'asset'}},{'pair': ['ETH', 'RCN'], 'minimalOrder':{'amount':18.85369532, 'unit': 'asset'}},{'pair': ['ETH', 'REP'], 'minimalOrder':{'amount':0.09090889, 'unit': 'asset'}},{'pair': ['ETH', 'RLC'], 'minimalOrder':{'amount':3.31125828, 'unit': 'asset'}},{'pair': ['ETH', 'SALT'], 'minimalOrder':{'amount':0.47976035, 'unit': 'asset'}},{'pair': ['ETH', 'SC'], 'minimalOrder':{'amount':442.47787611, 'unit': 'asset'}},{'pair': ['ETH', 'SNGLS'], 'minimalOrder':{'amount':14.0833169, 'unit': 'asset'}},{'pair': ['ETH', 'SNT'], 'minimalOrder':{'amount':62.39081607, 'unit': 'asset'}},{'pair': ['ETH', 'STORJ'], 'minimalOrder':{'amount':2.83649319, 'unit': 'asset'}},{'pair': ['ETH', 'STRAT'], 'minimalOrder':{'amount':0.53191489, 'unit': 'asset'}},{'pair': ['ETH', 'TIME'], 'minimalOrder':{'amount':0.0749939, 'unit': 'asset'}},{'pair': ['ETH', 'TIX'], 'minimalOrder':{'amount':11.35873146, 'unit': 'asset'}},{'pair': ['ETH', 'TKN'], 'minimalOrder':{'amount':1.47492625, 'unit': 'asset'}},{'pair': ['ETH', 'TRST'], 'minimalOrder':{'amount':7.04225352, 'unit': 'asset'}},{'pair': ['ETH', 'VIB'], 'minimalOrder':{'amount':15.16622179, 'unit': 'asset'}},{'pair': ['ETH', 'WAVES'], 'minimalOrder':{'amount':0.34251619, 'unit': 'asset'}},{'pair': ['ETH', 'WINGS'], 'minimalOrder':{'amount':3.65652104, 'unit': 'asset'}},{'pair': ['ETH', 'XEM'], 'minimalOrder':{'amount':9.53270672, 'unit': 'asset'}},{'pair': ['ETH', 'XLM'], 'minimalOrder':{'amount':50.13033888, 'unit': 'asset'}},{'pair': ['ETH', 'XMR'], 'minimalOrder':{'amount':0.01415023, 'unit': 'asset'}},{'pair': ['ETH', 'XRP'], 'minimalOrder':{'amount':8.1292882, 'unit': 'asset'}},{'pair': ['ETH', 'ZEC'], 'minimalOrder':{'amount':0.00617284, 'unit': 'asset'}},{'pair': ['USDT', 'BCH'], 'minimalOrder':{'amount':0.00254734, 'unit': 'asset'}},{'pair': ['USDT', 'BTC'], 'minimalOrder':{'amount':0.00039117, 'unit': 'asset'}},{'pair': ['USDT', 'BTG'], 'minimalOrder':{'amount':1e-8, 'unit': 'asset'}},{'pair': ['USDT', 'DASH'], 'minimalOrder':{'amount':0.00677201, 'unit': 'asset'}},{'pair': ['USDT', 'ETC'], 'minimalOrder':{'amount':0.16853933, 'unit': 'asset'}},{'pair': ['USDT', 'ETH'], 'minimalOrder':{'amount':0.0081103, 'unit': 'asset'}},{'pair': ['USDT', 'LTC'], 'minimalOrder':{'amount':0.04358565, 'unit': 'asset'}},{'pair': ['USDT', 'NEO'], 'minimalOrder':{'amount':0.07125891, 'unit': 'asset'}},{'pair': ['USDT', 'OMG'], 'minimalOrder':{'amount':0.36585366, 'unit': 'asset'}},{'pair': ['USDT', 'XMR'], 'minimalOrder':{'amount':0.02290076, 'unit': 'asset'}},{'pair': ['USDT', 'XRP'], 'minimalOrder':{'amount':13.35149255, 'unit': 'asset'}},{'pair': ['USDT', 'ZEC'], 'minimalOrder':{'amount':0.01004282, 'unit': 'asset'}}],
                            requires: ['key', 'secret'],
                            tid: 'tid',
@@ -1222,8 +1397,7 @@ Trader.getCapabilities = function (ccxtSlug) {
 //Dynamic getCapabilities - takes a minut to load all exchanges (too long)
 Trader.setCapabilities = function (ccxtSlug) {
     var retFlag = false;
-
-
+                                       
     if(_.isUndefined(ccxtSlug)){
        var ret = [];
        var ccxtExchanges = Ccxt.exchanges;
@@ -1233,18 +1407,18 @@ Trader.setCapabilities = function (ccxtSlug) {
           try {
             Trader = new Ccxt[exchange]();
           } catch (e) {
-            console.log(e);
+            console.log(e); 
             return;
           }
-
+          
           var trader = Trader.describe();
           var capabilities = [];
-
+          
           var arrPair = [];
           var arrAssets = [];
           var arrCurrencies = []
           var markets = null;
-
+          
           if(Trader.hasPublicAPI){ //solve _1broker issue (don't have public API and atm API key is not entered).
              retFlag = false;
              (async () => {
@@ -1259,26 +1433,26 @@ Trader.setCapabilities = function (ccxtSlug) {
              deasync.loopWhile(function(){return !retFlag;});
              arrPair = [];
              if(markets !== null){
-                _.each(markets, market => {
+                _.each(markets, market => {  
                    try{
                       var amountMin = market.limits.amount.min;
                    }catch(e){
                       var amountMin = 1e8;
                    }
-                   arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});
+                   arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});  
                    if(arrAssets.toString().search(market.base) == -1){
                       arrAssets.push(market.base);
                    }
                    if(arrCurrencies.toString().search(market.quote) == -1){
                       arrCurrencies.push(market.quote);
                    }
-
+                                         
                 });
              }
           }
           if(markets !== null){
              capabilities = {
-                name : 'ccxt-' + trader.id,
+                name : 'ccxt-' + trader.id, 
                 slug: 'ccxt-' + trader.id,
                 currencies: arrCurrencies.sort(),
                 assets: arrAssets.sort(),
@@ -1294,7 +1468,7 @@ Trader.setCapabilities = function (ccxtSlug) {
                 tid: 'tid',
                 providesHistory: 'date',
                 providesFullHistory: Trader.fetchTrades ? true : false,
-                tradable: Trader.hasPrivateAPI ? true : false,
+                tradable: Trader.hasPrivateAPI ? true : false,  
              };
              ret.push(capabilities);
           }
@@ -1305,18 +1479,18 @@ Trader.setCapabilities = function (ccxtSlug) {
        try {
          Trader = new Ccxt[ccxtSlug]();
        } catch (e) {
-         console.log(e);
+         console.log(e); 
          return;
        }
-
+       
        var trader = Trader.describe();
        var capabilities = [];
-
+       
        var arrPair = [];
        var arrAssets = [];
        var arrCurrencies = []
        var markets = null;
-
+       
        if(Trader.hasPublicAPI){ //solve _1broker issue (don't have public API and atm API key is not entered).
           retFlag = false;
           (async () => {
@@ -1330,26 +1504,26 @@ Trader.setCapabilities = function (ccxtSlug) {
           deasync.loopWhile(function(){return !retFlag;});
           arrPair = [];
           if(markets !== null){
-             _.each(markets, market => {
+             _.each(markets, market => {  
                 try{
                    var amountMin = market.limits.amount.min;
                 }catch(e){
                    var amountMin = 1e8;
                 }
-                arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});
+                arrPair.push({pair: [market.quote, market.base], minimalOrder: { amount: amountMin, unit: 'asset'}});  
                 if(arrAssets.toString().search(market.base) == -1){
                    arrAssets.push(market.base);
                 }
                 if(arrCurrencies.toString().search(market.quote) == -1){
                    arrCurrencies.push(market.quote);
                 }
-
+                                      
              });
           }
        }
        if(markets !== null){
           capabilities = {
-             name : 'ccxt-' + trader.id,
+             name : 'ccxt-' + trader.id, 
              slug: 'ccxt',
              currencies: arrCurrencies.sort(),
              assets: arrAssets.sort(),
@@ -1365,7 +1539,7 @@ Trader.setCapabilities = function (ccxtSlug) {
              tid: 'tid',
              providesHistory: 'date',
              providesFullHistory: Trader.fetchTrades ? true : false,
-             tradable: Trader.hasPrivateAPI ? true : false,
+             tradable: Trader.hasPrivateAPI ? true : false,  
           };
        };
        return capabilities;
